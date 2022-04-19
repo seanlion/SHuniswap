@@ -3,12 +3,17 @@ pragma solidity ^0.8.4;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "./IFactory.sol";
+import "./IExchange.sol";
 
 contract Exchange is ERC20{
     address public tokenAddress; // every exchange allows swaps with only one token. v1은 이더랑만 교환 가능
+    address public factoryAddress; // Linking to Factory
+
     constructor(address _token) ERC20("SHuniswap-V1", "SHUNI-V1"){
         require(_token != address(0), "invalid token address");
         tokenAddress = _token;
+        factoryAddress = msg.sender;
     }
 
     // exchange에 유동성 주입하는 기능, payable이라 ether를 받을 수 있음.
@@ -92,6 +97,27 @@ contract Exchange is ERC20{
 
         IERC20(tokenAddress).transfer(msg.sender, tokensBought);
     }
+    //기존 ethToTokenSwap에서 msg.sender로 token을 넘기는 로직 때문에 새로운 함수 만듬.(msg.sender가 엔드유저가 안 될 수 있어서.)
+    function ethToToken(uint256 _minTokens, address recipient) private {
+        uint256 tokenReserve = getReserve();
+        uint256 tokensBought = getAmount(
+            msg.value, // 토큰 스왑하기 위해 받는 ether input
+            address(this).balance - msg.value,
+            tokenReserve
+        );
+
+        require(tokensBought >= _minTokens, "insufficient output amount");
+
+        IERC20(tokenAddress).transfer(recipient, tokensBought);
+    }
+
+    function ethToTokenSwap(uint256 _minTokens) public payable {
+        ethToToken(_minTokens, msg.sender);
+    }
+
+    function ethToTokenTransfer(uint256 _minTokens, address _recipient) public payable{
+        ethToToken(_minTokens, _recipient);
+    }
 
     function tokenToEthSwap(uint256 _tokenSold, uint256 _minEth) public {
         uint256 tokenReserve = getReserve();
@@ -102,6 +128,17 @@ contract Exchange is ERC20{
         require(ethBought >= _minEth, "insufficient output amount");
         IERC20(tokenAddress).transferFrom(msg.sender, address(this), _tokenSold);
         payable(msg.sender).transfer(ethBought);
+    }
 
+    function tokenToTokenSwap(uint256 _tokenSold, uint256 _minTokensBought, address _tokenAddress) public{ // token주소는 바꿀 토큰의 주소
+        address exchangeAddress = IFactory(factoryAddress).getExchange(_tokenAddress);
+        require(exchangeAddress != address(this) && exchangeAddress != address(0), "invalid exchange address");
+
+        uint256 tokenReserve = getReserve();
+        uint256 ethBought = getAmount(_tokenSold, tokenReserve, address(this).balance);
+
+        IERC20(tokenAddress).transferFrom(msg.sender, address(this), _tokenSold);
+
+        IExchange(exchangeAddress).ethToTokenTransfer{value: ethBought}(_minTokensBought, msg.sender);
     }
 }
